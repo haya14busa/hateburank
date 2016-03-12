@@ -1,0 +1,5 @@
+cron:
+- description: monday morning weekly newsletter
+  url: /api/tweet/weekly
+  schedule: every monday 06:00
+  timezone: Asia/Tokyo
