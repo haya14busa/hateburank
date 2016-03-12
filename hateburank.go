@@ -29,17 +29,26 @@ const debug = false
 
 var api *anaconda.TwitterApi
 
-var weeklyCategories = []category.Category{
-	category.Hotentry,
-	category.It,
-	category.Game,
-}
+var (
+	dailyCategories = []category.Category{
+		category.Hotentry,
+		category.It,
+		category.Game,
+	}
+
+	weeklyCategories = []category.Category{
+		category.Hotentry,
+		category.It,
+		category.Game,
+	}
+)
 
 func init() {
 	anaconda.SetConsumerKey(Consumer_Key)
 	anaconda.SetConsumerSecret(Consumer_Secret)
 	api = anaconda.NewTwitterApi(Access_Token, Access_Token_Secret)
 
+	http.HandleFunc("/api/tweet/daily", dailyHandler)
 	http.HandleFunc("/api/tweet/weekly", weeklyHandler)
 	http.HandleFunc("/", topHandler)
 }
@@ -55,6 +64,28 @@ func topHandler(w http.ResponseWriter, r *http.Request) {
 
 type Tweeted struct {
 	Url string
+}
+
+func dailyHandler(w http.ResponseWriter, r *http.Request) {
+	setContext(r)
+	ctx := newappengine.NewContext(r)
+
+	force := r.URL.Query().Get("force") != ""
+
+	var errors []string
+
+	for _, c := range dailyCategories {
+		if err := daily(ctx, c, force); err != nil {
+			log.Errorf(ctx, "Fail to run daily job for %v: %v", c, err.Error())
+			errors = append(errors, err.Error())
+		}
+	}
+	if len(errors) > 0 {
+		http.Error(w, strings.Join(errors, "\n"), 500)
+		return
+	}
+
+	fmt.Fprint(w, fmt.Sprintf("Succeed to run daily job"))
 }
 
 func weeklyHandler(w http.ResponseWriter, r *http.Request) {
@@ -77,6 +108,26 @@ func weeklyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	fmt.Fprint(w, fmt.Sprintf("Succeed to run weekly job"))
+}
+
+func daily(ctx context.Context, c category.Category, force bool) error {
+	dailyurl := hateburankurl.DailyFromCategoryLatest(c)
+	key := datastore.NewKey(ctx, "dailyurl", dailyurl, 0, nil)
+
+	if didTweet(ctx, key, dailyurl) && !force {
+		return fmt.Errorf("Already tweeted: %s", dailyurl)
+	}
+
+	if _, err := tweetDaily(ctx, c, dailyurl); err != nil {
+		return err
+	}
+	log.Debugf(ctx, "Succeed to post tweet for url: %v", dailyurl)
+
+	if err := saveTweet(ctx, key, dailyurl); err != nil {
+		return err
+	}
+	log.Debugf(ctx, "Succeed to save tweet for url: %v", dailyurl)
+	return nil
 }
 
 func weekly(ctx context.Context, c category.Category, force bool) error {
@@ -117,6 +168,28 @@ func saveTweet(ctx context.Context, key *datastore.Key, url string) error {
 		return err
 	}
 	return nil
+}
+
+const daily_template = `[hateburank-daily:{{.Category}}] {{.StartDate}} の日間はてなブックマークランキング {{.Url}}`
+
+func tweetDaily(ctx context.Context, c category.Category, url string) (anaconda.Tweet, error) {
+	startDate := time.Now().AddDate(0, 0, -1)
+
+	tmpl := template.Must(template.New("daily_template").Parse(daily_template))
+	var msg bytes.Buffer
+	data := struct {
+		Category  string
+		StartDate string
+		Url       string
+	}{
+		Category:  c.String(),
+		StartDate: startDate.Format("2006/01/02"),
+		Url:       url,
+	}
+	if err := tmpl.Execute(&msg, data); err != nil {
+		return anaconda.Tweet{}, err
+	}
+	return tweet(ctx, msg.String())
 }
 
 const weekly_template = `[hateburank-weekly:{{.Category}}] {{.StartDate}}-{{.EndDate}} の週間はてなブックマークランキング {{.Url}}`
