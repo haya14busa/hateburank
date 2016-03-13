@@ -41,6 +41,12 @@ var (
 		category.It,
 		category.Game,
 	}
+
+	monthlyCategories = []category.Category{
+		category.Hotentry,
+		category.It,
+		category.Game,
+	}
 )
 
 func init() {
@@ -50,6 +56,7 @@ func init() {
 
 	http.HandleFunc("/api/tweet/daily", dailyHandler)
 	http.HandleFunc("/api/tweet/weekly", weeklyHandler)
+	http.HandleFunc("/api/tweet/monthly", monthlyHandler)
 	http.HandleFunc("/", topHandler)
 }
 
@@ -110,6 +117,28 @@ func weeklyHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, fmt.Sprintf("Succeed to run weekly job"))
 }
 
+func monthlyHandler(w http.ResponseWriter, r *http.Request) {
+	setContext(r)
+	ctx := newappengine.NewContext(r)
+
+	force := r.URL.Query().Get("force") != ""
+
+	var errors []string
+
+	for _, c := range monthlyCategories {
+		if err := monthly(ctx, c, force); err != nil {
+			log.Errorf(ctx, "Fail to run monthly job for %v: %v", c, err.Error())
+			errors = append(errors, err.Error())
+		}
+	}
+	if len(errors) > 0 {
+		http.Error(w, strings.Join(errors, "\n"), 500)
+		return
+	}
+
+	fmt.Fprint(w, fmt.Sprintf("Succeed to run monthly job"))
+}
+
 func daily(ctx context.Context, c category.Category, force bool) error {
 	dailyurl := hateburankurl.DailyFromCategoryLatest(c)
 	key := datastore.NewKey(ctx, "dailyurl", dailyurl, 0, nil)
@@ -147,6 +176,26 @@ func weekly(ctx context.Context, c category.Category, force bool) error {
 		return err
 	}
 	log.Debugf(ctx, "Succeed to save tweet for url: %v", weeklyurl)
+	return nil
+}
+
+func monthly(ctx context.Context, c category.Category, force bool) error {
+	monthlyurl := hateburankurl.MonthlyFromCategoryLatest(c)
+	key := datastore.NewKey(ctx, "monthlyurl", monthlyurl, 0, nil)
+
+	if didTweet(ctx, key, monthlyurl) && !force {
+		return fmt.Errorf("Already tweeted: %s", monthlyurl)
+	}
+
+	if _, err := tweetMonthly(ctx, c, monthlyurl); err != nil {
+		return err
+	}
+	log.Debugf(ctx, "Succeed to post tweet for url: %v", monthlyurl)
+
+	if err := saveTweet(ctx, key, monthlyurl); err != nil {
+		return err
+	}
+	log.Debugf(ctx, "Succeed to save tweet for url: %v", monthlyurl)
 	return nil
 }
 
@@ -209,6 +258,28 @@ func tweetWeekly(ctx context.Context, c category.Category, url string) (anaconda
 		Category:  c.String(),
 		StartDate: startDate.Format("2006/01/02"),
 		EndDate:   endDate.Format("2006/01/02"),
+		Url:       url,
+	}
+	if err := tmpl.Execute(&msg, data); err != nil {
+		return anaconda.Tweet{}, err
+	}
+	return tweet(ctx, msg.String())
+}
+
+const monthly_template = `[hateburank-monthly:{{.Category}}] {{.StartDate}} の月間はてなブックマークランキング {{.Url}}`
+
+func tweetMonthly(ctx context.Context, c category.Category, url string) (anaconda.Tweet, error) {
+	startDate := time.Now().AddDate(0, -1, 0)
+
+	tmpl := template.Must(template.New("monthly_template").Parse(monthly_template))
+	var msg bytes.Buffer
+	data := struct {
+		Category  string
+		StartDate string
+		Url       string
+	}{
+		Category:  c.String(),
+		StartDate: startDate.Format("2006年01月"),
 		Url:       url,
 	}
 	if err := tmpl.Execute(&msg, data); err != nil {
