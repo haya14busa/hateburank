@@ -5,5 +5,5 @@ cron:
   timezone: Asia/Tokyo
 - description: morning daily newsletter
   url: /api/tweet/daily
-  schedule: every day 09:00
+  schedule: every day 06:00
   timezone: Asia/Tokyo
