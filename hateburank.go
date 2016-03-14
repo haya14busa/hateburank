@@ -27,6 +27,8 @@ import (
 
 const debug = false
 
+const location = "Asia/Tokyo"
+
 var api *anaconda.TwitterApi
 
 var (
@@ -58,6 +60,16 @@ func init() {
 	http.HandleFunc("/api/tweet/weekly", weeklyHandler)
 	http.HandleFunc("/api/tweet/monthly", monthlyHandler)
 	http.HandleFunc("/", topHandler)
+
+	setJST()
+}
+
+func setJST() {
+	loc, err := time.LoadLocation(location)
+	if err != nil {
+		loc = time.FixedZone(location, 9*60*60)
+	}
+	time.Local = loc
 }
 
 func setContext(r *http.Request) {
